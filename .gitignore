@@ -1,0 +1,31 @@
+# Python / backend
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/.mypy_cache/
+
+# Env files (keep .env.example committed if we add one)
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Node / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.turbo/
+frontend/next-env.d.ts
+
+# Personal notes (not for the evaluators)
+DEVLOG.md
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
