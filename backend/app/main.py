@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.session import get_db
 
 app = FastAPI(title="Profound llms.txt Generator", version="0.1.0")
 
@@ -15,5 +18,6 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+    await db.execute(text("SELECT 1"))
     return {"status": "ok", "env": settings.ENV}

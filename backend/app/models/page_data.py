@@ -1,9 +1,15 @@
-from datetime import datetime
+from __future__ import annotations
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.crawl_job import CrawlJob
 
 
 class PageData(Base):
@@ -14,17 +20,15 @@ class PageData(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     crawl_job_id: Mapped[int] = mapped_column(
-        ForeignKey("crawl_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("crawl_jobs.id", ondelete="CASCADE"), index=True
     )
-    url: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    canonical_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    title: Mapped[str | None] = mapped_column(String, nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    section: Mapped[str | None] = mapped_column(String, nullable=True)
-    is_optional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    crawled_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    url: Mapped[str] = mapped_column(String, index=True)
+    canonical_url: Mapped[str | None] = mapped_column(String)
+    title: Mapped[str | None] = mapped_column(String)
+    description: Mapped[str | None] = mapped_column(Text)
+    section: Mapped[str | None] = mapped_column(String)
+    is_optional: Mapped[bool] = mapped_column(default=False)
+    status_code: Mapped[int | None]
+    crawled_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    crawl_job: Mapped["CrawlJob"] = relationship(back_populates="pages")  # noqa: F821
+    crawl_job: Mapped[CrawlJob] = relationship(back_populates="pages")

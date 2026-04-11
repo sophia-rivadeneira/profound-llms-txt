@@ -1,9 +1,15 @@
-from datetime import datetime
+from __future__ import annotations
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, func
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey, Index, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.site import Site
 
 
 class Monitor(Base):
@@ -18,18 +24,12 @@ class Monitor(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     site_id: Mapped[int] = mapped_column(
-        ForeignKey("sites.id", ondelete="CASCADE"), unique=True, nullable=False
+        ForeignKey("sites.id", ondelete="CASCADE"), unique=True
     )
-    interval_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    last_checked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    next_check_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    interval_hours: Mapped[int] = mapped_column(default=24)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    last_checked_at: Mapped[datetime | None]
+    next_check_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    site: Mapped["Site"] = relationship(back_populates="monitor")  # noqa: F821
+    site: Mapped[Site] = relationship(back_populates="monitor")

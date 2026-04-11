@@ -257,10 +257,42 @@ profound-website/
 - [ ] README stub with "run locally" instructions (fill in during Phase 6)
 
 ### Phase 2: Core Crawler
-- [ ] Build httpx + BeautifulSoup crawler (URL discovery, metadata extraction)
-- [ ] Implement crawl depth control and rate limiting
-- [ ] Add Playwright fallback with auto-detection
-- [ ] Build async background task system for crawls
+
+**Design decisions** (interview-defensible rationale in DEVLOG):
+- URL discovery: sitemap-first (`/sitemap.xml`, also read from `robots.txt`), link-crawl fallback when no sitemap exists.
+- `robots.txt`: respect it via stdlib `urllib.robotparser`. Check before fetching every URL.
+- URL normalization: strip fragments, normalize trailing slashes, lowercase scheme/host, resolve redirects, same registered-domain enforcement (subdomains allowed).
+- Crawl limits: `max_pages=200`, `max_depth=5`, `max_duration_seconds=120` as defaults.
+- Rate limiting: `httpx.AsyncClient` with a per-domain semaphore (5 concurrent), 100ms delay between requests, identifiable User-Agent (`ProfoundLlmsTxtBot/0.1 (+<github-url>)`).
+- Playwright fallback: trigger when the httpx response looks like a JS shell (empty body, `<div id="root">`/`<div id="__next">` with no content, or <500 bytes of visible text).
+- Background task orchestration: FastAPI `BackgroundTasks` — built in, sufficient for take-home scope, avoids Celery/arq/Redis complexity.
+- Error handling: per-URL exceptions are caught and recorded to `PageData.status_code`; unhandled exceptions mark the `CrawlJob.status='failed'` with `error_message`. No per-page retries in v1.
+- `POST /sites` is immediate: creates the `Site` row *and* kicks off the initial `CrawlJob` in the background, returning `{site_id, crawl_job_id, status}`. Frontend polls `GET /sites/{id}/crawls/{crawl_job_id}` for progress.
+
+**Deliverables:**
+- [ ] Add deps: `httpx`, `beautifulsoup4`, `lxml`, `playwright`
+- [ ] `playwright install chromium` (installs the browser binary)
+- [ ] `app/services/crawler.py` — async `Crawler` class
+  - [ ] `robots.txt` check via `urllib.robotparser`
+  - [ ] `sitemap.xml` discovery + parsing (also check `robots.txt` for sitemap locations)
+  - [ ] URL normalization helpers + same-registered-domain guard
+  - [ ] `httpx.AsyncClient` with semaphore, delay, custom User-Agent
+  - [ ] BFS link extraction respecting `max_pages` / `max_depth` / `max_duration`
+  - [ ] Metadata extraction: `<title>`, `<meta name="description">`, `<meta property="og:*">`, `<link rel="canonical">`, `<h1>`
+  - [ ] Playwright fallback trigger via the JS-shell heuristic
+- [ ] `app/services/playwright_fetcher.py` — async Playwright wrapper that returns rendered HTML for a single URL
+- [ ] `app/schemas/` — Pydantic request/response models for `Site`, `CrawlJob`, `PageData`
+- [ ] `app/routers/sites.py` — `POST /sites` (creates + triggers crawl), `GET /sites/{id}`
+- [ ] `app/routers/crawls.py` — `GET /sites/{id}/crawls/{crawl_id}` (status polling)
+- [ ] Wire routers into `app/main.py`
+- [ ] Tests: fixture HTML pages covering sitemap parsing, link extraction, URL normalization, metadata extraction, limit enforcement, robots.txt respect
+
+**Explicitly deferred (not in scope for Phase 2):**
+- Authentication / user accounts.
+- Retry-with-backoff for transient errors (add only if encountered in testing).
+- Incremental re-crawls — full re-crawls only. Change detection is Phase 5.
+- Sitemap index files (sitemaps of sitemaps) — add only if trivial.
+- Section classification (docs / blog / API) — Phase 3, belongs with llms.txt generation.
 
 ### Phase 3: llms.txt Generation
 - [ ] Parse crawled data into llms.txt format per spec
