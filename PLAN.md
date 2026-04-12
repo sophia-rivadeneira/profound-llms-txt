@@ -295,10 +295,33 @@ profound-website/
 - Section classification (docs / blog / API) — Phase 3, belongs with llms.txt generation.
 
 ### Phase 3: llms.txt Generation
-- [ ] Parse crawled data into llms.txt format per spec
-- [ ] Implement smart section organization (docs, API, guides, etc.)
-- [ ] Content summarization for descriptions
-- [ ] Store generated files with version hashing
+
+**Design decisions** (interview-defensible rationale in DEVLOG):
+- Section classification pipeline: C → A → B. User-configured rules first, URL path pattern matching second (`/docs/*` → Documentation, `/blog/*` → Blog, etc.), LLM fallback third for unmatched pages.
+- LLM integration: single Claude Haiku call per crawl generates site summary (blockquote) + classifies remaining unmatched pages. Keeps costs low, deterministic path handles the common case.
+- llms.txt spec compliance: H1 (site name from `Site.title`), blockquote (LLM-generated summary), H2-delimited sections with `- [title](url): description` links, `## Optional` section for blog/changelog/legal.
+- User edit support: users can edit summary and section assignments after generation. Re-crawl preserves edits unless the underlying content changed (dual-column tracking: `summary` + `summary_generated`). If LLM produces a different summary on re-crawl, user edit is stale and gets overwritten.
+- Change detection: diff new llms.txt output against previous `content_hash`. Log a `change_event` row when different.
+- Generation trigger: automatic after every completed crawl (initial, manual, or scheduled re-crawl). Generation itself is a fast post-crawl step; the LLM call adds ~1-2s.
+
+**Deliverables:**
+- [ ] Add dep: `anthropic` (Claude API client)
+- [ ] `app/services/classifier.py` — section classification pipeline
+  - [ ] Default URL path pattern rules (docs, blog, api, guides, changelog, legal, etc.)
+  - [ ] User-override lookup from site config
+  - [ ] LLM fallback for unmatched pages (Claude Haiku)
+- [ ] `app/services/generator.py` — llms.txt builder
+  - [ ] Assemble markdown per spec from classified pages
+  - [ ] LLM call for site summary generation
+  - [ ] Dual-column edit tracking (`summary` / `summary_generated`)
+  - [ ] Content hashing and change detection vs previous version
+  - [ ] Create/update `llms_files` row and `change_events` row
+- [ ] `app/routers/llms.py` — endpoints
+  - [ ] `GET /sites/{id}/llms` — JSON response with content + metadata
+  - [ ] `GET /sites/{id}/llms.txt` — raw markdown (text/plain)
+- [ ] Update `app/services/crawler.py` — call generator after crawl completes
+- [ ] Update schemas: `LlmsFileResponse`
+- [ ] Tests: section classification rules, llms.txt output format, change detection, edit preservation
 - [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
 ### Phase 4: Frontend UI

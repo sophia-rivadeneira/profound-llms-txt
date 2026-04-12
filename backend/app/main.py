@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from app.routers import crawls, sites
+from app.routers import crawls, llms, sites
 
 app = FastAPI(title="Profound llms.txt Generator", version="0.1.0")
 
@@ -26,3 +26,4 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
 
 app.include_router(sites.router)
 app.include_router(crawls.router)
+app.include_router(llms.router)

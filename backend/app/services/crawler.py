@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CrawlJob, PageData, Site
 from app.services.extract import PageMeta, extract_metadata, looks_like_js_shell
+from app.services.generator import generate_llms_txt
 from app.services.sitemap import fetch_sitemap_urls
 from app.services.robots import RobotsChecker
 from app.services.urls import (
@@ -90,6 +91,8 @@ async def run_crawl(
                 site.description = homepage_meta.description
 
         await session.commit()
+
+        await generate_llms_txt(site, crawl_job, session)
 
     except Exception as exc:
         await session.rollback()
