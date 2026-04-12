@@ -299,18 +299,21 @@ profound-website/
 - [ ] Implement smart section organization (docs, API, guides, etc.)
 - [ ] Content summarization for descriptions
 - [ ] Store generated files with version hashing
+- [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
 ### Phase 4: Frontend UI
 - [ ] Landing page with URL input
 - [ ] Crawl progress/status view
 - [ ] llms.txt preview with copy/download
 - [ ] Monitoring dashboard with version diffs
+- [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
 ### Phase 5: Monitoring System
 - [ ] APScheduler integration for periodic re-crawls
 - [ ] Content diffing and change detection
 - [ ] Version history storage and display
 - [ ] Manual refresh endpoint
+- [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
 ### Phase 6: Deployment & Polish
 - [ ] Deploy frontend to Vercel

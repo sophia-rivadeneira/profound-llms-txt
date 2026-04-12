@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
+from app.routers import crawls, sites
 
 app = FastAPI(title="Profound llms.txt Generator", version="0.1.0")
 
@@ -21,3 +22,7 @@ app.add_middleware(
 async def health(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     await db.execute(text("SELECT 1"))
     return {"status": "ok", "env": settings.ENV}
+
+
+app.include_router(sites.router)
+app.include_router(crawls.router)
