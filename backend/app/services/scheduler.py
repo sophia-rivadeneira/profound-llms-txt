@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.session import AsyncSessionLocal
@@ -14,8 +14,27 @@ from app.services.crawler import run_crawl_in_background
 logger = logging.getLogger(__name__)
 
 TICK_INTERVAL_SECONDS = 300
+ORPHAN_REAPER_ERROR_MESSAGE = "Orphaned by process restart"
 
 _task: asyncio.Task | None = None
+
+
+async def reap_orphaned_crawls() -> int:
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(CrawlJob)
+                .where(CrawlJob.status.in_(("pending", "running")))
+                .values(
+                    status="failed",
+                    error_message=ORPHAN_REAPER_ERROR_MESSAGE,
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+        count = result.rowcount or 0
+    if count:
+        logger.info("reaped %d orphaned crawl(s) on startup", count)
+    return count
 
 
 async def _tick() -> None:

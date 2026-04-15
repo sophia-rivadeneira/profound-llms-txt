@@ -315,6 +315,74 @@ class TestTick:
         assert {s for s, _ in self.dispatched} == {site_a.id, site_b.id}
 
 
+class TestReapOrphanedCrawls:
+    @pytest.fixture(autouse=True)
+    def patch_session_local(self, monkeypatch, session_factory):
+        monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    async def test_reaps_pending_crawl(self, session, session_factory):
+        site = await _make_site(session)
+        stuck = CrawlJob(
+            site_id=site.id, triggered_by="manual", status="pending"
+        )
+        session.add(stuck)
+        await session.commit()
+        stuck_id = stuck.id
+
+        count = await scheduler.reap_orphaned_crawls()
+
+        assert count == 1
+        async with session_factory() as s2:
+            reaped = await s2.get(CrawlJob, stuck_id)
+            assert reaped.status == "failed"
+            assert reaped.error_message == scheduler.ORPHAN_REAPER_ERROR_MESSAGE
+            assert reaped.completed_at is not None
+
+    async def test_reaps_running_crawl(self, session, session_factory):
+        site = await _make_site(session)
+        stuck = CrawlJob(
+            site_id=site.id,
+            triggered_by="manual",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add(stuck)
+        await session.commit()
+        stuck_id = stuck.id
+
+        count = await scheduler.reap_orphaned_crawls()
+
+        assert count == 1
+        async with session_factory() as s2:
+            reaped = await s2.get(CrawlJob, stuck_id)
+            assert reaped.status == "failed"
+
+    async def test_leaves_completed_crawls_alone(self, session, session_factory):
+        site = await _make_site(session)
+        completed = CrawlJob(
+            site_id=site.id,
+            triggered_by="manual",
+            status="completed",
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+        session.add(completed)
+        await session.commit()
+        completed_id = completed.id
+
+        count = await scheduler.reap_orphaned_crawls()
+
+        assert count == 0
+        async with session_factory() as s2:
+            untouched = await s2.get(CrawlJob, completed_id)
+            assert untouched.status == "completed"
+            assert untouched.error_message is None
+
+    async def test_no_orphans_returns_zero(self, session_factory):
+        count = await scheduler.reap_orphaned_crawls()
+        assert count == 0
+
+
 class TestLoopExceptionIsolation:
     async def test_loop_survives_tick_exception(self, monkeypatch):
         call_count = {"n": 0}

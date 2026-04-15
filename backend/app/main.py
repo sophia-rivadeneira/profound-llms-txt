@@ -13,6 +13,7 @@ from app.services import scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await scheduler.reap_orphaned_crawls()
     scheduler.start()
     try:
         yield
