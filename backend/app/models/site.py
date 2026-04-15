@@ -21,6 +21,7 @@ class Site(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     url: Mapped[str] = mapped_column(String, unique=True)
     domain: Mapped[str] = mapped_column(String, index=True)
+    slug: Mapped[str | None] = mapped_column(String, unique=True, index=True)
     title: Mapped[str | None] = mapped_column(String)
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

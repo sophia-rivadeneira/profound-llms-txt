@@ -1,11 +1,8 @@
 from __future__ import annotations
-
 import asyncio
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
-
 import httpx
-
 from app.services.urls import USER_AGENT
 
 

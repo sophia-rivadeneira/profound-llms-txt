@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
 
 import httpx
@@ -59,11 +61,15 @@ async def _parse_sitemap(
                 ))
         return urls
 
-    # Regular urlset
     result: list[str] = []
     for url_tag in soup.find_all("url"):
         loc = url_tag.find("loc")
-        if loc and loc.string:
-            result.append(normalize_url(loc.string.strip()))
+        if not loc or not loc.string:
+            continue
+        raw = loc.string.strip()
+        parsed = urlparse(raw)
+        if not parsed.path or (parsed.path == "/" and parsed.fragment):
+            continue
+        result.append(normalize_url(raw))
 
     return result

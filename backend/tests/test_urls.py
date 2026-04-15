@@ -33,8 +33,12 @@ class TestIsSameDomain:
     def test_same(self):
         assert is_same_domain("https://example.com/about", "https://example.com/")
 
-    def test_subdomain_allowed(self):
-        assert is_same_domain("https://docs.example.com/page", "https://example.com/")
+    def test_subdomain_rejected(self):
+        assert not is_same_domain("https://docs.example.com/page", "https://example.com/")
+
+    def test_www_normalized(self):
+        assert is_same_domain("https://example.com/page", "https://www.example.com/")
+        assert is_same_domain("https://www.example.com/page", "https://example.com/")
 
     def test_different_domain(self):
         assert not is_same_domain("https://other.com/page", "https://example.com/")

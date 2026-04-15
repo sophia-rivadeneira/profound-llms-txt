@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -8,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ChangeEvent, CrawlJob, LlmsFile, PageData, Site
-from app.services.classifier import classify_by_url, is_optional_section
+from app.services.classifier import classify_pages, is_optional_section
 
 
 async def generate_llms_txt(
@@ -27,15 +28,10 @@ async def generate_llms_txt(
 
     _classify_pages(pages)
 
-    existing = await session.execute(
-        select(LlmsFile).where(LlmsFile.site_id == site.id)
-    )
+    existing = await session.execute(select(LlmsFile).where(LlmsFile.site_id == site.id))
     llms_file = existing.scalar_one_or_none()
 
-    new_summary = site.description
-    display_summary = _resolve_display_summary(llms_file, new_summary)
-
-    content = _build_markdown(site, display_summary, pages)
+    content = _build_markdown(site, site.description, pages)
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
     old_hash = None
@@ -43,51 +39,51 @@ async def generate_llms_txt(
         old_hash = llms_file.content_hash
         llms_file.content = content
         llms_file.content_hash = content_hash
-        llms_file.summary = display_summary
-        llms_file.summary_generated = new_summary
         llms_file.generated_at = datetime.now(timezone.utc)
     else:
         llms_file = LlmsFile(
             site_id=site.id,
             content=content,
             content_hash=content_hash,
-            summary=display_summary,
-            summary_generated=new_summary,
             generated_at=datetime.now(timezone.utc),
         )
         session.add(llms_file)
 
     if old_hash and old_hash != content_hash:
-        change_event = await _compute_change_event(
-            site, crawl_job, old_hash, pages, session
-        )
+        change_event = await _compute_change_event(site, crawl_job, old_hash, pages, session)
         session.add(change_event)
 
     await session.commit()
 
 
+def _format_page_link(
+    page: PageData,
+    site_description_normalized: str | None,
+) -> str:
+    link_text = page.title or page.url
+    description = ""
+    if page.description:
+        normalized = normalize_text(page.description)
+        if normalized and normalized != site_description_normalized:
+            description = f": {page.description}"
+    return f"- [{link_text}]({page.url}){description}"
+
+
+def normalize_text(text: str | None) -> str:
+    """Canonicalize text for equality comparisons — lowercase, collapse
+    whitespace, trim. Used to detect duplicate descriptions inherited from
+    a global <meta> tag."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def _classify_pages(pages: list[PageData]) -> None:
+    classifications = classify_pages(pages)
     for page in pages:
-        section = classify_by_url(page.url)
-        if section:
-            page.section = section
-            page.is_optional = is_optional_section(section)
-        else:
-            page.section = "General"
-            page.is_optional = False
-
-
-def _resolve_display_summary(
-    llms_file: LlmsFile | None,
-    new_summary: str | None,
-) -> str | None:
-    if llms_file is None:
-        return new_summary
-
-    user_edited = llms_file.summary != llms_file.summary_generated
-    if user_edited and llms_file.summary_generated == new_summary:
-        return llms_file.summary
-    return new_summary
+        section, optional = classifications.get(page.url, ("General", False))
+        page.section = section
+        page.is_optional = optional
 
 
 def _build_markdown(
@@ -97,7 +93,10 @@ def _build_markdown(
 ) -> str:
     lines: list[str] = []
 
-    lines.append(f"# {site.title or site.domain}")
+    heading = site.title or site.domain or ""
+    site_description_normalized = normalize_text(site.description)
+
+    lines.append(f"# {heading}")
     lines.append("")
 
     if summary:
@@ -118,9 +117,7 @@ def _build_markdown(
         lines.append(f"## {section_name}")
         lines.append("")
         for page in section_pages:
-            link_text = page.title or page.url
-            description = f": {page.description}" if page.description else ""
-            lines.append(f"- [{link_text}]({page.url}){description}")
+            lines.append(_format_page_link(page, site_description_normalized))
         lines.append("")
 
     if optional_sections:
@@ -130,9 +127,7 @@ def _build_markdown(
             lines.append(f"### {section_name}")
             lines.append("")
             for page in section_pages:
-                link_text = page.title or page.url
-                description = f": {page.description}" if page.description else ""
-                lines.append(f"- [{link_text}]({page.url}){description}")
+                lines.append(_format_page_link(page, site_description_normalized))
             lines.append("")
 
     return "\n".join(lines)
@@ -163,9 +158,7 @@ async def _compute_change_event(
     changes: list[str] = []
 
     if previous_crawl:
-        prev_pages_result = await session.execute(
-            select(PageData).where(PageData.crawl_job_id == previous_crawl.id)
-        )
+        prev_pages_result = await session.execute(select(PageData).where(PageData.crawl_job_id == previous_crawl.id))
         prev_pages = {p.url: p for p in prev_pages_result.scalars().all()}
         curr_pages = {p.url: p for p in current_pages}
 

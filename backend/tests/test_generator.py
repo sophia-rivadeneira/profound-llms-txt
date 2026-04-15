@@ -1,5 +1,5 @@
-from app.models import LlmsFile, PageData, Site
-from app.services.generator import _build_markdown, _resolve_display_summary
+from app.models import PageData, Site
+from app.services.generator import _build_markdown
 
 
 def _make_site(title: str = "Example", domain: str = "example.com") -> Site:
@@ -121,40 +121,3 @@ class TestBuildMarkdown:
         assert "## Optional" in content
 
 
-class TestResolveDisplaySummary:
-    def test_first_generation_returns_new_summary(self):
-        assert _resolve_display_summary(None, "Fresh summary") == "Fresh summary"
-
-    def test_no_user_edit_returns_new_summary(self):
-        llms_file = LlmsFile(
-            site_id=1,
-            content="",
-            content_hash="x",
-            summary="Old generated",
-            summary_generated="Old generated",
-        )
-        assert _resolve_display_summary(llms_file, "New generated") == "New generated"
-
-    def test_user_edit_preserved_when_source_unchanged(self):
-        llms_file = LlmsFile(
-            site_id=1,
-            content="",
-            content_hash="x",
-            summary="User's polished version",
-            summary_generated="Boring LLM output",
-        )
-        # Re-generation produces the same LLM output as last time — user edit is still valid
-        result = _resolve_display_summary(llms_file, "Boring LLM output")
-        assert result == "User's polished version"
-
-    def test_user_edit_overwritten_when_source_changed(self):
-        llms_file = LlmsFile(
-            site_id=1,
-            content="",
-            content_hash="x",
-            summary="User's old edit",
-            summary_generated="Old LLM output",
-        )
-        # LLM produces different output — user's edit is stale
-        result = _resolve_display_summary(llms_file, "New LLM output")
-        assert result == "New LLM output"

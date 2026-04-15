@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from itertools import chain
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -18,25 +20,41 @@ class PageMeta:
     links: list[str] = field(default_factory=list)
 
 
+_MAX_HREFLESS_GUESSES_PER_PAGE = 10
+_BOILERPLATE_RE = re.compile(r"^(?:©|\(c\)|copyright\b|\d{4}\b)", re.IGNORECASE)
+
+
+def _title_text(soup: BeautifulSoup) -> str | None:
+    tag = soup.find("title")
+    if not tag or not tag.string:
+        return None
+    return tag.string.strip() or None
+
+
+def _meta_content(soup: BeautifulSoup, **attrs: str) -> str | None:
+    tag = soup.find("meta", attrs=attrs)
+    if not tag:
+        return None
+    content = tag.get("content", "").strip()
+    return content or None
+
+
+def _looks_like_boilerplate(text: str) -> bool:
+    stripped = text.strip()
+    if stripped.isdigit():
+        return True
+    return bool(_BOILERPLATE_RE.match(stripped))
+
+
 def extract_metadata(html: str, page_url: str) -> PageMeta:
     soup = BeautifulSoup(html, "lxml")
     page = PageMeta(url=page_url)
 
-    html_title = soup.find("title")
-    if html_title and html_title.string:
-        page.title = html_title.string.strip()
-
-    open_graph_title = soup.find("meta", attrs={"property": "og:title"})
-    if open_graph_title and not page.title:
-        page.title = open_graph_title.get("content", "").strip() or None
-
-    meta_description = soup.find("meta", attrs={"name": "description"})
-    if meta_description:
-        page.description = meta_description.get("content", "").strip() or None
-
-    open_graph_description = soup.find("meta", attrs={"property": "og:description"})
-    if open_graph_description and not page.description:
-        page.description = open_graph_description.get("content", "").strip() or None
+    page.title = _title_text(soup) or _meta_content(soup, property="og:title")
+    page.description = (
+        _meta_content(soup, name="description")
+        or _meta_content(soup, property="og:description")
+    )
 
     canonical_link = soup.find("link", attrs={"rel": "canonical"})
     canonical_href = canonical_link.get("href") if canonical_link else None
@@ -56,6 +74,32 @@ def extract_metadata(html: str, page_url: str) -> PageMeta:
         if normalized not in collected_links:
             collected_links.add(normalized)
             page.links.append(normalized)
+
+    # Some sites render nav links as <a> with no href (onClick handlers only).
+    # Derive candidate URLs from link text inside structural regions
+    guesses = 0
+    structural_anchors = chain.from_iterable(
+        container.find_all("a")
+        for container in soup.find_all(["nav", "footer", "header"])
+    )
+    for anchor in structural_anchors:
+        if guesses >= _MAX_HREFLESS_GUESSES_PER_PAGE:
+            break
+        if anchor.get("href"):
+            continue
+        text = anchor.get_text(strip=True)
+        if not text or len(text) > 40:
+            continue
+        if _looks_like_boilerplate(text):
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+        if len(slug) < 3:
+            continue
+        candidate = normalize_url(urljoin(page_url, f"/{slug}"))
+        if candidate not in collected_links:
+            collected_links.add(candidate)
+            page.links.append(candidate)
+            guesses += 1
 
     return page
 

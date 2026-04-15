@@ -325,11 +325,35 @@ profound-website/
 - [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
 ### Phase 4: Frontend UI
-- [ ] Landing page with URL input
-- [ ] Crawl progress/status view
-- [ ] llms.txt preview with copy/download
-- [ ] Monitoring dashboard with version diffs
-- [ ] Senior engineer review: run review agent, fix all issues, re-run tests
+
+**Design decisions** (interview-defensible rationale in DEVLOG):
+- Route structure: Next.js App Router, multi-page. `/` is the unified landing + dashboard (URL input + table of previously-generated sites). `/sites/[id]` is the site detail view. No separate `/sites` index — having one page makes the tool feel "real" on first visit.
+- Data fetching: **TanStack Query** for all server state. Polling the crawl status endpoint while `pending`/`running`, cache invalidation on successful mutations (edit summary, trigger re-crawl, monitor settings).
+- Component library: **shadcn/ui** with Neutral palette as-is, Geist font. Visual direction pulled from tryprofound.com (Profound's actual brand), not peec.ai. Minimal custom CSS.
+- Crawl progress UX: live `pages_found` counter from the existing backend field, updated via TanStack Query polling at 2s intervals. No streaming log — the counter is enough.
+- Change notifications: **passive / pull-based**. localStorage tracks `lastSeenEventId` per site. Dashboard rows with unseen changes show a badge; the site detail page shows a banner with a "Review" button that scrolls to and auto-expands the unread change events in the timeline. Unread entries get a subtle background tint. No auth means no server-side "seen" state.
+- Change visualization: **structured change timeline**, not a side-by-side diff. Each event shows counts (`+N -N ~N`), expandable to reveal specific pages added/removed/modified. Rejected side-by-side because users of an llms.txt tool want to know *what changed and whether they care*, not parse two walls of markdown.
+- Editing scope: summary-only in Phase 4. Section re-assignment (drag-and-drop) is deferred — the dual-column edit tracking we built in Phase 3 supports it, but the UI is disproportionate work for Phase 4.
+- Backend tweak: `POST /sites` returns the existing site id on duplicate instead of a bare 409, so the frontend can always POST and navigate to the returned id.
+
+**Deliverables:**
+- [ ] `frontend/` — Next.js App Router scaffold (already exists from Phase 1)
+- [ ] Install shadcn/ui components: `button`, `input`, `card`, `table`, `dialog`, `badge`, `separator`, `textarea`
+- [ ] `lib/api.ts` — typed fetch wrapper + TanStack Query setup
+- [ ] `lib/seen.ts` — localStorage helpers for tracking `lastSeenEventId` per site
+- [ ] `app/page.tsx` — landing + dashboard: URL input, search, table of generated sites with "new changes" badges
+- [ ] `app/sites/[id]/page.tsx` — site detail view
+  - [ ] Site header (domain, title, generated-at)
+  - [ ] Current llms.txt preview with copy + download buttons
+  - [ ] Editable summary field (inline edit, save via PATCH)
+  - [ ] Pages grouped by section (read-only list)
+  - [ ] Change timeline (collapsible events, unread banner, review-and-expand flow)
+  - [ ] Monitor settings panel (interval, pause toggle)
+- [ ] Loading / error states for every query
+- [ ] Backend: `PATCH /sites/{id}` endpoint for summary editing
+- [ ] Backend: `POST /sites` returns 200 with existing site id on duplicate (was 409)
+- [ ] Test on diverse live sites: static blog, server-rendered docs, SPA
+- [ ] Senior engineer review: run review agent, fix all issues
 
 ### Phase 5: Monitoring System
 - [ ] APScheduler integration for periodic re-crawls
@@ -351,3 +375,62 @@ profound-website/
 - Test monitoring detects changes
 - Test Playwright fallback triggers on JS-rendered sites
 - Verify llms.txt output conforms to spec at llmstxt.org
+
+## Future Work / Stretch Goals
+
+Bullets below are presentation-ready — each one is a thing I considered, has a concrete reason it was deferred, and a note on how I'd implement it with more time.
+
+**LLM-powered enrichment**
+- *What:* Claude Haiku fallback for section classification when URL patterns miss, plus polished summary generation instead of using the raw meta description.
+- *Why deferred:* A deployed demo with an LLM dependency adds an API key to manage, per-request cost, latency on the critical path, and a new failure mode right before the interview. Deterministic generation is boring but defensible.
+- *How:* Add `ANTHROPIC_API_KEY` to backend env, wrap calls in a try/except that falls back to the current behavior on any error, cache responses by content hash so re-crawls don't re-pay.
+
+**Active change notifications (email / webhook / Slack)**
+- *What:* When a change event is detected, push it to the user instead of waiting for them to revisit the dashboard.
+- *Why deferred:* No auth means no stable identity to send to. Also touches deliverability, unsubscribe flows, and a worker for outbound delivery — all scope creep.
+- *How:* Add a `notifications` table keyed by site id + destination (email / webhook url / Slack channel), fire on `ChangeEvent` insert, use Resend for email and raw POST for webhooks. Slack is just a webhook with a formatted payload.
+
+**Section editing UI (drag-and-drop)**
+- *What:* Let users re-classify pages into different sections, rename sections, or hide pages from the generated file.
+- *Why deferred:* The dual-column edit-tracking we built in Phase 3 already supports preserving manual overrides, but building the DnD UI and the override-persistence rules is disproportionate work for Phase 4.
+- *How:* `dnd-kit` for the drag interaction, a `PageOverride` table storing `(page_url, section_override, hidden)`, generator merges overrides at markdown-build time.
+
+**Full version history + side-by-side diff**
+- *What:* Archive every generated llms.txt and render a git-style side-by-side diff between any two versions.
+- *Why deferred:* Rejected in favor of the structured change timeline — users of this tool want "what changed that I care about," not two walls of markdown to parse. But a power-user "show me the raw diff" view would still be nice.
+- *How:* Store each generated `content` snapshot in a `llms_file_versions` table, render with `react-diff-viewer-continued` behind a "View raw diff" toggle on the timeline event.
+
+**Authentication & multi-user dashboards**
+- *What:* User accounts, per-user site lists, team sharing.
+- *Why deferred:* Explicitly out of scope for the take-home — the assignment is a public utility, not a SaaS product.
+- *How:* Clerk or Auth.js on the frontend, `user_id` foreign key on `sites`, row-level scoping in every query.
+
+**Distributed crawler**
+- *What:* Move crawling off `BackgroundTasks` onto a real queue (arq or Celery) with worker pods so larger sites don't block the API process.
+- *Why deferred:* Adds Redis, a worker deployment, and failure-mode debugging — all for a demo that will crawl sites in the 50–200 page range. `BackgroundTasks` is the right call at this scale and easier to defend in the interview.
+- *How:* arq is the lightest lift — Redis URL in config, `@arq.worker` wrapping `run_crawl`, worker as a second Railway service.
+
+**Retry with exponential backoff**
+- *What:* Transient 5xx / timeout errors during a crawl currently mark the page as failed. Retrying 2–3 times with backoff would catch flaky responses.
+- *Why deferred:* Wasn't load-bearing for the demo path — real sites rarely flake during a single crawl window.
+- *How:* `tenacity` retry decorator around the `httpx` and Playwright fetches, capped at ~3 attempts with jitter.
+
+**Hybrid sitemap + link-graph crawling**
+- *What:* Current crawler is pure link-following from the seed URL. Consuming `sitemap.xml` when available would find pages that aren't linked from the homepage (e.g. old blog posts, deep docs).
+- *Why deferred:* Most demo sites are small enough that link-following reaches everything relevant.
+- *How:* Before the BFS crawl, fetch `/sitemap.xml` and `/sitemap_index.xml`, parse with `lxml`, seed the frontier with every URL on the same host.
+
+**TTL-based robots.txt cache**
+- *What:* Robots.txt is fetched once per crawl. For long-running monitors, we should refetch periodically in case the site changes its rules.
+- *Why deferred:* Monitoring isn't shipping in Phase 4 anyway, and a fresh fetch per crawl is correct if slower.
+- *How:* Cache keyed by host with a 24h TTL, invalidated at the start of each monitor cycle.
+
+**Lazy-loaded content handling**
+- *What:* Sites that load content on scroll (infinite-scroll blogs, JS-rendered catalogs) currently only return what's in the initial viewport.
+- *Why deferred:* Playwright already handles the dominant JS-rendering case, and scroll automation is site-specific and fragile.
+- *How:* In the Playwright fallback, detect `scroll` or `IntersectionObserver` triggers, scroll to bottom in a loop until page height stabilizes, then extract.
+
+**Real-time streaming crawl log**
+- *What:* Show a live log of "Fetching /docs/intro... Fetching /blog/..." as the crawl runs.
+- *Why deferred:* Rejected in favor of the `pages_found` counter — the counter communicates progress without the complexity of SSE/WebSockets and without overwhelming the UI.
+- *How:* SSE endpoint streaming log lines from a per-crawl-job queue, consumed on the frontend with `EventSource`.
