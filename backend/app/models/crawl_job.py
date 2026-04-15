@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -18,12 +18,18 @@ class CrawlJob(Base):
     __tablename__ = "crawl_jobs"
     __table_args__ = (
         CheckConstraint(
-            "triggered_by IN ('initial', 'scheduled', 'manual')",
+            "triggered_by IN ('scheduled', 'manual')",
             name="crawl_jobs_triggered_by_check",
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'completed', 'failed')",
             name="crawl_jobs_status_check",
+        ),
+        Index(
+            "uq_crawl_jobs_one_active_per_site",
+            "site_id",
+            unique=True,
+            postgresql_where="status IN ('pending', 'running')",
         ),
     )
 

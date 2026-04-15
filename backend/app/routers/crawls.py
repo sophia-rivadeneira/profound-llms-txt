@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -92,21 +93,17 @@ async def trigger_crawl(
     if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    active = await db.execute(
-        select(CrawlJob)
-        .where(CrawlJob.site_id == site_id, CrawlJob.status.in_(["pending", "running"]))
-        .limit(1)
-    )
-    if active.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="A crawl is already in progress")
-
     crawl_job = CrawlJob(
         site_id=site.id,
         triggered_by="manual",
         status="pending",
     )
     db.add(crawl_job)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A crawl is already in progress")
 
     background_tasks.add_task(run_crawl_in_background, site.id, crawl_job.id)
 

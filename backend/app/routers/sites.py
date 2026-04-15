@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models import ChangeEvent, CrawlJob, Site
+from app.models import ChangeEvent, CrawlJob, Monitor, Site
 from app.schemas import SiteCreate, SiteCreateResponse, SiteResponse
 from app.services.crawler import run_crawl_in_background
 from app.services.urls import domain_to_slug, extract_domain, normalize_to_origin
+
+DEFAULT_MONITOR_INTERVAL_HOURS = 24
 
 router = APIRouter(prefix="/sites", tags=["sites"])
 
@@ -28,14 +33,28 @@ async def _response_for_existing_site(
     if latest_job is None:
         latest_job = CrawlJob(
             site_id=existing.id,
-            triggered_by="initial",
+            triggered_by="manual",
             status="pending",
         )
         db.add(latest_job)
-        await db.commit()
-        background_tasks.add_task(
-            run_crawl_in_background, existing.id, latest_job.id
-        )
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            active = await db.scalar(
+                select(CrawlJob)
+                .where(
+                    CrawlJob.site_id == existing.id,
+                    CrawlJob.status.in_(["pending", "running"]),
+                )
+                .limit(1)
+            )
+            if active is not None:
+                latest_job = active
+        else:
+            background_tasks.add_task(
+                run_crawl_in_background, existing.id, latest_job.id
+            )
     return SiteCreateResponse(
         site=SiteResponse.model_validate(existing),
         crawl_job_id=latest_job.id,
@@ -66,10 +85,19 @@ async def create_site(
 
     crawl_job = CrawlJob(
         site_id=site.id,
-        triggered_by="initial",
+        triggered_by="manual",
         status="pending",
     )
     db.add(crawl_job)
+
+    now = datetime.now(timezone.utc)
+    monitor = Monitor(
+        site_id=site.id,
+        interval_hours=DEFAULT_MONITOR_INTERVAL_HOURS,
+        is_active=True,
+        next_check_at=now + timedelta(hours=DEFAULT_MONITOR_INTERVAL_HOURS),
+    )
+    db.add(monitor)
     await db.commit()
 
     background_tasks.add_task(run_crawl_in_background, site.id, crawl_job.id)

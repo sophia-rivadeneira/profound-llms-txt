@@ -79,6 +79,20 @@ export type ChangeEvent = {
   pages_removed: number;
   pages_modified: number;
   summary: string | null;
+  triggered_by: "scheduled" | "manual";
+};
+
+export type Monitor = {
+  site_id: number;
+  interval_hours: number;
+  is_active: boolean;
+  last_checked_at: string | null;
+  next_check_at: string | null;
+};
+
+export type MonitorPatch = {
+  interval_hours?: number;
+  is_active?: boolean;
 };
 
 export type PageDataRow = {
@@ -124,6 +138,15 @@ export const api = {
 
   listChangeEvents: (siteId: number) =>
     request<ChangeEvent[]>(`/sites/${siteId}/changes`),
+
+  getMonitor: (siteId: number) =>
+    request<Monitor>(`/sites/${siteId}/monitor`),
+
+  patchMonitor: (siteId: number, body: MonitorPatch) =>
+    request<Monitor>(`/sites/${siteId}/monitor`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   deleteSite: (siteId: number) =>
     request<void>(`/sites/${siteId}`, { method: "DELETE" }),

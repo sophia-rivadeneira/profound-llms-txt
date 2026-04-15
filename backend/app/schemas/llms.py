@@ -24,5 +24,6 @@ class ChangeEventResponse(BaseModel):
     pages_removed: int
     pages_modified: int
     summary: str | None
+    triggered_by: str
 
     model_config = {"from_attributes": True}

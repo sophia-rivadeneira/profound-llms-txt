@@ -1,24 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 
+logger = logging.getLogger(__name__)
+
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
-from app.models import CrawlJob, PageData, Site
+from app.models import CrawlJob, Monitor, PageData, Site
 from app.services.extract import PageMeta, extract_metadata, looks_like_js_shell
 from app.services.generator import generate_llms_txt
 from app.services.playwright_renderer import Browser, fetch_rendered_html, optional_browser
 from app.services.sitemap import fetch_sitemap_urls
 from app.services.robots import RobotsChecker
 from app.services.urls import USER_AGENT, is_same_domain, normalize_url
+
+AUTO_PAUSE_FAILURE_THRESHOLD = 3
 
 
 @dataclass
@@ -78,6 +84,41 @@ def _apply_homepage_meta(site: Site, pages: list[PageMeta]) -> None:
         site.description = homepage_meta.description
 
 
+async def _should_auto_pause(site_id: int, session: AsyncSession) -> bool:
+    result = await session.execute(
+        select(CrawlJob.status)
+        .where(
+            CrawlJob.site_id == site_id,
+            CrawlJob.status.in_(("failed", "completed")),
+        )
+        .order_by(CrawlJob.id.desc())
+        .limit(AUTO_PAUSE_FAILURE_THRESHOLD)
+    )
+    statuses = result.scalars().all()
+    return (
+        len(statuses) == AUTO_PAUSE_FAILURE_THRESHOLD
+        and all(s == "failed" for s in statuses)
+    )
+
+
+async def _finalize_monitor(
+    site_id: int,
+    session: AsyncSession,
+    *,
+    success: bool,
+) -> None:
+    monitor = await session.scalar(select(Monitor).where(Monitor.site_id == site_id))
+    if monitor is None:
+        return
+    now = datetime.now(timezone.utc)
+    monitor.last_checked_at = now
+    if monitor.is_active:
+        monitor.next_check_at = now + timedelta(hours=monitor.interval_hours)
+    if not success and monitor.is_active and await _should_auto_pause(site_id, session):
+        monitor.is_active = False
+    await session.commit()
+
+
 async def run_crawl(
     site: Site,
     crawl_job: CrawlJob,
@@ -121,7 +162,11 @@ async def run_crawl(
 
         await session.commit()
 
-        await generate_llms_txt(site, crawl_job, session)
+        try:
+            await generate_llms_txt(site, crawl_job, session)
+        except Exception:
+            logger.exception("llms generation failed for crawl %s; crawl stays completed", crawl_job.id)
+        await _finalize_monitor(site.id, session, success=True)
 
     except Exception as exc:
         await session.rollback()
@@ -135,6 +180,8 @@ async def run_crawl(
             crawl_job.error_message = str(exc)[:500]
         crawl_job.completed_at = datetime.now(timezone.utc)
         await session.commit()
+
+        await _finalize_monitor(site.id, session, success=False)
 
 
 async def _crawl(

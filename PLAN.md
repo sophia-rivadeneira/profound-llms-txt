@@ -356,13 +356,143 @@ profound-website/
 - [ ] Senior engineer review: run review agent, fix all issues
 
 ### Phase 5: Monitoring System
-- [ ] APScheduler integration for periodic re-crawls
-- [ ] Content diffing and change detection
-- [ ] Version history storage and display
-- [ ] Manual refresh endpoint
-- [ ] Senior engineer review: run review agent, fix all issues, re-run tests
 
-### Phase 6: Deployment & Polish
+**Already shipped in earlier phases (call out in interview):**
+- Change detection (`change_events` insert in `generator._compute_change_event`) — Phase 3.
+- Manual refresh endpoint (`POST /sites/{id}/crawls` with 409 concurrent guard) — Phase 2.
+- Change timeline UI (`change-timeline.tsx`, "unread" banner, localStorage `lastSeenEventId`) — Phase 4.
+
+What's left for Phase 5 is the actual *automated* loop: a scheduler, monitor lifecycle, the endpoints the frontend monitor panel needs, and a small fix to stop the timeline from filling up with no-op events once monitoring fires every day.
+
+**Design decisions** (interview-defensible rationale in DEVLOG):
+
+- **Hand-rolled in-process `asyncio` loop, not APScheduler.** ~20 lines, started from FastAPI's `lifespan` hook and cancelled cleanly on shutdown. No new dependency, no library magic to defend in front of the panel. Exception isolation via `try/except` inside the loop body so a bad tick doesn't kill the loop forever. Same instinct as Phase 2's `BackgroundTasks` decision — match the tool to the scope, push complexity out of the demo. What APScheduler would buy us (cron expressions, persistent jobs, listeners) we don't need.
+
+- **No message queue, so the timer and the worker live in the same process.** Phase 2 deliberately punted on a queue. Adding a separate scheduler service (Railway cron, APScheduler in its own container) would re-introduce the producer/consumer split we already chose not to pay for. The in-process loop reuses the existing `_run_crawl_in_background` helper as-is — same code path the manual `POST /crawls` already uses, called from a new place.
+
+- **Tick cadence: every 5 minutes.** Each tick scans `monitors WHERE is_active AND next_check_at <= NOW()` and dispatches a scheduled crawl per due row. With `interval_hours` defaulting to 24, a 5-minute tick is way more resolution than any user-pickable interval needs, and the DB cost is rounding error (one indexed query, ~12 times per hour, returning 0 rows on the vast majority of ticks). The partial index on `(next_check_at) WHERE is_active` skips paused monitors entirely. Note: 5 minutes is how often the loop *checks the table*, not how often any site is re-crawled — re-crawls happen at each site's `interval_hours` cadence (default 24h).
+
+- **Multi-worker safety from day one: `SELECT ... FOR UPDATE SKIP LOCKED`.** Two extra clauses on the due-monitors query, no extra deps. Within the locking transaction, the tick advances `next_check_at` for each claimed row before committing — so even if Railway scaled to multiple uvicorn workers tomorrow, two scheduler loops can't double-fire the same monitor. Pre-empts the obvious "what if you scale workers?" interview question. Documented in DEVLOG so the interviewer hears the reasoning even if they don't ask.
+
+- **Opt-out monitor creation.** A `Monitor` row is auto-created (`is_active=true`, `interval_hours=24`, `next_check_at = now + 24h`) only on the *new-site* branch of `POST /sites`, not on the duplicate-return path — duplicate sites already have their monitor.
+
+- **Every completed crawl bumps `last_checked_at` and `next_check_at`**, regardless of trigger source (`initial`, `manual`, `scheduled`). A manual refresh resets the schedule clock so the scheduler doesn't fire a redundant crawl five minutes later. The thing the schedule is preventing is *stale data* — a manual refresh just made the data fresh, so resetting the clock is consistent with what `next_check_at` actually means.
+
+- **Failures advance the schedule normally; auto-pause after 3 consecutive failures.** Two new columns on `monitors`: `consecutive_failures` (int, default 0) and `paused_reason` (nullable: `null | "user" | "failures"`). Each failed crawl increments `consecutive_failures`, advances `next_check_at` by the normal interval, and — if the count hits 3 — also sets `is_active=false`, `paused_reason="failures"`. Each successful crawl resets `consecutive_failures` to 0. The frontend monitor settings panel branches on `paused_reason` and renders a warning banner ("Monitoring auto-paused after 3 failed checks") instead of the normal pause-toggle when the value is `"failures"`. Resume from auto-pause sets `next_check_at = now` so the next tick picks it back up immediately. Caps wasted crawl budget for permanently broken sites at 3 attempts; the rest of the time it behaves exactly like the simple bump-and-retry path.
+
+- **ChangeEvent dedup gate.** Today the generator emits a `ChangeEvent` after *every* crawl, including the first one (where `old_hash is None`) and unchanged re-crawls. Once daily monitoring runs, that floods the timeline with "llms.txt content changed" rows. Fix: gate `ChangeEvent` insertion on `old_hash is not None AND old_hash != new_hash`. The hash check is the real signal — counts can be zero on a meaningful re-section without being misleading. No special "initial generation" event on first crawl — the change timeline is for *changes*, and the site creation timestamp + first `crawl_job` already record when monitoring began.
+
+- **`triggered_by` propagates to the change timeline.** Scheduled crawls get `triggered_by="scheduled"` so the frontend can label each event ("automatic check found 2 new pages" vs "you manually refreshed").
+
+- **Time zones: everything UTC.** `next_check_at` is timezone-aware UTC; the loop compares against `datetime.now(timezone.utc)`. Interval math uses `timedelta(hours=...)`.
+
+**Deliverables:**
+
+- [ ] Alembic migration: add `consecutive_failures int default 0` and `paused_reason text null` to `monitors`
+- [ ] `app/services/scheduler.py`
+  - [ ] ~20-line `asyncio` loop with `try/except` exception isolation and `await asyncio.sleep(300)` between ticks
+  - [ ] `_tick()` — `SELECT FROM monitors WHERE is_active AND next_check_at <= NOW() FOR UPDATE SKIP LOCKED`, advance `next_check_at` per claimed row inside the transaction, commit, then dispatch each crawl via the existing `_run_crawl_in_background` helper
+  - [ ] `start()` / `stop()` helpers; `stop()` cancels the task and awaits the `CancelledError`
+- [ ] Wire scheduler into `app/main.py` via `lifespan` (start on app boot, shutdown on exit)
+- [ ] `app/routers/sites.py` — auto-create `Monitor` row on the new-site branch of `create_site` (not on `_response_for_existing_site`)
+- [ ] `app/services/crawler.py` (or wherever `run_crawl` finalizes) — after every crawl completes:
+  - [ ] On success: set `last_checked_at = now`, `next_check_at = now + interval_hours`, `consecutive_failures = 0`
+  - [ ] On failure: same `last_checked_at` / `next_check_at` update, increment `consecutive_failures`, and if it hits 3 also set `is_active=false`, `paused_reason="failures"`
+  - [ ] Skip silently if no monitor row exists (defensive — shouldn't happen post-Phase-5)
+- [ ] `app/services/generator.py` — gate `ChangeEvent` creation on `old_hash is not None and old_hash != new_hash`. Update Phase 3 tests that assumed an event is always created.
+- [ ] `app/routers/monitors.py` — new router
+  - [ ] `GET /sites/{id}/monitor` → `{interval_hours, is_active, paused_reason, last_checked_at, next_check_at, consecutive_failures}`
+  - [ ] `PATCH /sites/{id}/monitor` → body `{interval_hours?, is_active?}`
+    - [ ] On `interval_hours` change: recompute `next_check_at = last_checked_at + interval_hours` (or `now + interval` if never checked)
+    - [ ] On `is_active=true` after a pause: set `next_check_at = now`, clear `paused_reason`, reset `consecutive_failures = 0`
+    - [ ] On `is_active=false`: set `paused_reason="user"`
+    - [ ] Validation: `interval_hours` between 1 and 168 (one week), 422 otherwise
+- [ ] `GET /sites/{id}/changes` returning the timeline newest-first, joined with `crawl_jobs.triggered_by` so the frontend can label each event. (Phase 4's `change-timeline.tsx` likely already calls this — verify before duplicating.)
+- [ ] Schemas: `MonitorResponse`, `MonitorPatch`, `ChangeEventResponse` (with `triggered_by`)
+- [ ] Wire new routers into `app/main.py`
+- [ ] Frontend: monitor settings panel branches on `paused_reason`
+  - [ ] If `paused_reason === "failures"`: render warning banner ("Monitoring auto-paused after 3 failed checks") with a Resume button
+  - [ ] If `paused_reason === "user"` or `null`: render the normal pause/resume toggle + interval input
+- [ ] Tests:
+  - [ ] `_tick()` selects only `is_active AND next_check_at <= now` monitors
+  - [ ] `_tick()` advances `next_check_at` inside the transaction (so a second concurrent tick wouldn't see the row)
+  - [ ] `_tick()` gracefully handles a raised exception without killing the loop
+  - [ ] Monitor auto-created on first `POST /sites`, not on duplicate POSTs
+  - [ ] `last_checked_at` / `next_check_at` updated after success and after failure
+  - [ ] `consecutive_failures` increments on failure, resets on success
+  - [ ] 3 consecutive failures flips `is_active=false` and sets `paused_reason="failures"`
+  - [ ] `ChangeEvent` not created on first crawl; not created on unchanged re-crawl; *is* created when `old_hash != new_hash`
+  - [ ] `PATCH /monitor` interval validation (rejects 0, rejects 999)
+  - [ ] `PATCH /monitor` resume from auto-pause clears `paused_reason` and resets `consecutive_failures`
+- [ ] Manual smoke test: set a site's `interval_hours=1`, force `next_check_at` into the past, watch the next tick fire a scheduled crawl in the logs
+- [ ] Senior engineer review: run review agent on all Phase 5 code, fix all issues, re-run tests
+
+**Explicitly deferred (not in scope for Phase 5):**
+- Email / webhook / Slack notifications on change events — already in Future Work.
+- Exponential backoff between failed retries — auto-pause already caps wasted budget; backoff would be redundant complexity.
+- Per-site "force re-check now" button distinct from the existing manual refresh — `POST /crawls` already covers this.
+- Adaptive intervals (back off on unchanged sites, speed up on flaky ones).
+- Switching to a real task queue (arq) — same threshold reasoning as Phase 2; would unlock durable jobs and retries but isn't needed at take-home scale.
+
+### Phase 6: Code Quality Pass
+
+Final sweep before deployment focused on **cleanliness, efficiency, and scalability** — the "at large" view that per-phase review misses. Running-system QA (fresh-clone setup walk, error-path behavior, logging quality, demo readiness) is handled manually by the author and explicitly out of scope for this phase; every item below produces a code change, not a runbook entry.
+
+**Design decisions** (interview-defensible rationale in DEVLOG):
+
+- **Scope is code quality, not behavioral QA.** Per-phase review already caught single-file issues. This phase targets cross-phase drift, seams between phases, and "at large" code quality that's only visible when you zoom out across the whole repo.
+- **Test philosophy: functionality, not appearance.** Tests must verify observable behavior (button click → API call → UI updates) not implementation details (CSS classes, call counts, exact mock arguments). Audit every existing test against this rule and delete/rewrite the ones that fail.
+- **Env var organization gets its own exercise.** Config drift across phases is a known pain point — auditing `config.py`, `.env`, `.env.example`, and frontend `NEXT_PUBLIC_*` usage in one pass is cheaper than hunting them as they surface.
+- **Don't over-abstract.** Extract duplication only for patterns that appear 3+ times. A helper for "used once" is just indirection.
+
+**Deliverables:**
+
+*Cleanliness:*
+- [ ] **Router thinness audit** — every router in `app/routers/` should parse input, call a service, serialize output. Move business logic into `app/services/` where it leaked in.
+- [ ] **Duplication sweep** — extract repeated patterns (find-site-or-404, response envelopes, error mapping) into shared helpers. 3+ uses only.
+- [ ] **Dead code & unused deps** — remove unreferenced helpers, commented experiments, and entries in `pyproject.toml` / `package.json` that nothing imports.
+- [ ] **Naming consistency across phases** — rename drifted identifiers so related things have related names (e.g. crawl dispatch paths from Phase 2 vs Phase 5).
+- [ ] **Schema/model hygiene** — Pydantic response shapes consistent across routers (field names, optionality, datetime serialization). No SQLAlchemy models leaking into responses.
+- [ ] **Idiomatic patterns sweep** — rewrite code that's written in a verbose / Java-ish style into the native idiom of the language it's in. Backend: list/dict comprehensions instead of `for`-loop-plus-`append`, ternaries instead of 4-line `if/else` assignments, early returns instead of nested conditionals, f-strings instead of concatenation, `dict.get(k, default)` instead of `if k in dict`. Frontend: `.map()` in JSX, optional chaining (`?.`), nullish coalescing (`??`), ternary JSX instead of `if` blocks. Goal is the code reads like someone fluent wrote it, not translated from another language.
+- [ ] **General syntax cleanup** — run the formatters and linters end-to-end and fix everything they flag. Backend: `ruff format` + `ruff check --fix` across `app/` and `tests/`, plus a `mypy` pass if configured. Frontend: `prettier --write` + `eslint --fix` + `tsc --noEmit`. Then a manual pass for things formatters miss: consistent import ordering, no trailing whitespace, consistent quote style, line length, trailing commas in multi-line literals, blank-line conventions between top-level defs. Single commit so the diff is easy to skim.
+- [ ] **Env var / config audit** — cross-check `backend/app/config.py` against `backend/.env` and `backend/.env.example`; same for `frontend/.env.local` and `NEXT_PUBLIC_*` usage. Remove unused vars, add missing ones, normalize naming, verify the frontend/backend split is correct.
+
+*Efficiency:*
+- [ ] **Async correctness sweep** — grep for sync I/O inside `async def` paths (`requests`, sync file reads, sync DB calls hidden in helpers). Fix any found.
+- [ ] **N+1 sweep** — trace the queries behind `GET /api/sites` (dashboard) and `GET /api/sites/{id}` (detail). Add `selectinload` / `joinedload` for relationships always rendered together.
+- [ ] **Over-fetching check** — any route loading full rows when 2–3 columns would do? Select only what's used.
+- [ ] **Frontend query-cache scope** — audit TanStack Query `invalidateQueries` calls. Narrow any nuclear invalidations to the specific keys affected.
+
+*Scalability:*
+- [ ] **Orphaned `running` crawls on restart** — add a startup reconciliation in `lifespan` that flips stale `running` crawl_jobs to `failed` with an explanatory `error_message`. Answers the "what if the process crashes mid-crawl" interview question with ~10 lines.
+- [ ] **Unbounded list endpoints** — `GET /api/sites` returns everything today. Either paginate or document the take-home-scale decision in DEVLOG.
+- [ ] **Crawler concurrency bounds** — verify the per-domain semaphore is process-global, not per-crawl. Two concurrent crawls of the same domain should not double the load.
+- [ ] **Scheduler lock correctness** — re-read the `FOR UPDATE SKIP LOCKED` path and confirm `next_check_at` advances inside the same transaction.
+- [ ] **Index verification** — every index listed in the PLAN.md schema section actually exists in an Alembic migration.
+
+*Schema integrity:*
+- [ ] **Column usage audit** — for every column on every model, confirm it's both *written* and *read* somewhere in the codebase. Flag any column that's set but never read (dead data) or read but never set (silent nulls).
+- [ ] **Silent-drop check** — walk every `POST` / `PATCH` handler and confirm that no request field is accepted but then dropped before the DB write. Pydantic should reject unknown fields, but verify for each schema.
+- [ ] **Response completeness** — every column the frontend needs should appear in the corresponding Pydantic response schema. No "I forgot to add this field" gaps.
+- [ ] **Migration vs model reconciliation** — run `alembic check` (or diff `--autogenerate` output) to confirm the current models match what the migrations actually produced. No drift.
+- [ ] **Cascade behavior** — confirm `ON DELETE CASCADE` is set on every FK listed in the PLAN.md schema section. A `DELETE FROM sites` should clean the full graph.
+- [ ] **Enum / CHECK constraint coverage** — every value the code writes into `triggered_by`, `status`, `paused_reason` etc. is actually allowed by the DB-level constraint.
+
+*Test intentionality:*
+- [ ] **Test audit** — for each existing test, ask: "if I refactored the implementation without changing behavior, would this still pass?" If no, rewrite or delete. Drop tests that assert on CSS, exact call counts, or mock internals.
+- [ ] Add tests only for behaviors newly uncovered during cleanup (e.g. orphaned-crawl reconciliation).
+
+*Narrative sync:*
+- [ ] **DEVLOG update** — note scalability decisions made during this phase (pagination deferral, orphaned-crawl handling, concurrency bounds).
+- [ ] **PLAN.md checkbox sync** — mark earlier phases accurately so the final state reflects what actually shipped.
+- [ ] **Senior engineer review** — run review agent on all Phase 6 changes, fix issues, re-run tests.
+
+**Explicitly out of scope:**
+- Running-system QA: fresh-clone setup walk, error-path behavior, logging quality, demo readiness. Handled manually by the author.
+- README / local-run docs — Phase 7.
+- New features, design changes, or scope additions of any kind.
+
+### Phase 7: Deployment & Polish
 - [ ] Deploy frontend to Vercel
 - [ ] Deploy backend to Railway (Docker for Playwright)
 - [ ] Set up PostgreSQL on Railway

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models import ChangeEvent, LlmsFile, Site
+from app.models import ChangeEvent, CrawlJob, LlmsFile, Site
 from app.schemas import ChangeEventResponse, LlmsFileResponse
 
 router = APIRouter(prefix="/sites/{site_id}", tags=["llms"])
@@ -47,10 +47,23 @@ async def list_change_events(
     db: AsyncSession = Depends(get_db),
 ) -> list[ChangeEventResponse]:
     result = await db.execute(
-        select(ChangeEvent)
+        select(ChangeEvent, CrawlJob.triggered_by)
+        .join(CrawlJob, CrawlJob.id == ChangeEvent.crawl_job_id)
         .where(ChangeEvent.site_id == site_id)
         .order_by(ChangeEvent.detected_at.desc())
         .limit(50)
     )
-    events = result.scalars().all()
-    return [ChangeEventResponse.model_validate(e) for e in events]
+    return [
+        ChangeEventResponse(
+            id=event.id,
+            site_id=event.site_id,
+            crawl_job_id=event.crawl_job_id,
+            detected_at=event.detected_at,
+            pages_added=event.pages_added,
+            pages_removed=event.pages_removed,
+            pages_modified=event.pages_modified,
+            summary=event.summary,
+            triggered_by=triggered_by,
+        )
+        for event, triggered_by in result.all()
+    ]

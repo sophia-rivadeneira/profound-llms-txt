@@ -1,5 +1,6 @@
 from app.schemas.crawls import CrawlJobDetailResponse, CrawlJobResponse, PageDataResponse
 from app.schemas.llms import ChangeEventResponse, LlmsFileResponse
+from app.schemas.monitors import MonitorPatch, MonitorResponse
 from app.schemas.sites import SiteCreate, SiteCreateResponse, SiteResponse
 
 __all__ = [
@@ -7,6 +8,8 @@ __all__ = [
     "CrawlJobDetailResponse",
     "CrawlJobResponse",
     "LlmsFileResponse",
+    "MonitorPatch",
+    "MonitorResponse",
     "PageDataResponse",
     "SiteCreate",
     "SiteCreateResponse",

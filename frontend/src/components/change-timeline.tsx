@@ -99,6 +99,9 @@ function TimelineRow({
           <span className="text-sm font-medium">
             {new Date(event.detected_at).toLocaleString()}
           </span>
+          <span className="text-xs text-muted-foreground">
+            {event.triggered_by === "scheduled" ? "automatic check" : "manual refresh"}
+          </span>
           {unread && <Badge>New</Badge>}
         </div>
         <div className="flex items-center gap-3 text-sm font-mono">

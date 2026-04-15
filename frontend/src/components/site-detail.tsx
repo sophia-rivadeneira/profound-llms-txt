@@ -10,10 +10,11 @@ import { api, ApiError } from "@/lib/api";
 import { markSiteSeen, useLastSeenEventId } from "@/lib/seen";
 import { ChangeTimeline } from "@/components/change-timeline";
 import { PagesBySection } from "@/components/pages-by-section";
-import { CrawlErrorCard, LlmsLoadErrorCard } from "@/components/error-cards";
+import { CrawlErrorCard, LlmsLoadErrorCard } from "@/components/message-card";
 import { DeleteSiteDialog } from "@/components/delete-site-dialog";
 import { CrawlProgressBanner } from "@/components/crawl-progress-banner";
 import { LlmsPreview } from "@/components/llms-preview";
+import { MonitorSettings } from "@/components/monitor-settings";
 
 export function SiteDetail({ siteId }: { siteId: number }) {
   const queryClient = useQueryClient();
@@ -79,17 +80,14 @@ export function SiteDetail({ siteId }: { siteId: number }) {
   useEffect(() => {
     const prev = prevStatusRef.current;
     const curr = latestCrawl?.status;
-    // Transition into "completed" refreshes the per-site caches (new
-    // llms.txt, change events, crawled pages).
     if (prev && prev !== "completed" && curr === "completed") {
       for (const key of ["site", "llms", "changes", "crawl-detail"] as const) {
         queryClient.invalidateQueries({ queryKey: [key, siteId] });
       }
     }
-    // Transition into any terminal state refreshes the homepage list so
-    // its row picks up the new last_crawl_status badge immediately.
     if (prev && prev !== curr && (curr === "completed" || curr === "failed")) {
       queryClient.invalidateQueries({ queryKey: ["sites"] });
+      queryClient.invalidateQueries({ queryKey: ["monitor", siteId] });
     }
     prevStatusRef.current = curr;
   }, [latestCrawl?.status, queryClient, siteId]);
@@ -174,6 +172,8 @@ export function SiteDetail({ siteId }: { siteId: number }) {
         {llmsQuery.data && (<LlmsPreview siteId={siteId} content={llmsQuery.data.content} /> )}
 
         {pages.length > 0 && <PagesBySection pages={pages} />}
+
+        <MonitorSettings siteId={siteId} />
 
         <div ref={timelineRef}>
           <ChangeTimeline events={changeEvents} lastSeen={lastSeenEventId} reviewTick={reviewTick} onOpen={markAllChangesSeen} />
