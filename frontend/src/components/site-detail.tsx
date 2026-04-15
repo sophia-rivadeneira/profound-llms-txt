@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { SimpleTooltip } from "@/components/simple-tooltip";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, isStatusInFlight } from "@/lib/api";
 import { markSiteSeen, useLastSeenEventId } from "@/lib/seen";
 import { ChangeTimeline } from "@/components/change-timeline";
 import { PagesBySection } from "@/components/pages-by-section";
@@ -31,18 +31,13 @@ export function SiteDetail({ siteId }: { siteId: number }) {
   const crawlsQuery = useQuery({
     queryKey: ["crawls", siteId],
     queryFn: () => api.listCrawls(siteId),
-    refetchInterval: (query) => {
-      const latest = query.state.data?.[0];
-      return latest && (latest.status === "pending" || latest.status === "running")
-        ? 2000
-        : false;
-    },
+    refetchInterval: (query) =>
+      isStatusInFlight(query.state.data?.[0]?.status) ? 2000 : false,
   });
 
   const latestCrawl = crawlsQuery.data?.[0];
   const latestCompleted = crawlsQuery.data?.find((j) => j.status === "completed");
-  const isInProgress =
-    latestCrawl?.status === "pending" || latestCrawl?.status === "running";
+  const isInProgress = isStatusInFlight(latestCrawl?.status);
 
   const llmsQuery = useQuery({
     queryKey: ["llms", siteId],
@@ -76,6 +71,9 @@ export function SiteDetail({ siteId }: { siteId: number }) {
       queryClient.invalidateQueries({ queryKey: ["crawls", siteId] });
     },
   });
+
+  const recentlyRejected409 = triggerMutation.error instanceof ApiError && triggerMutation.error.status === 409;
+  const triggerDisabled = isInProgress || triggerMutation.isPending || recentlyRejected409;
 
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -127,11 +125,7 @@ export function SiteDetail({ siteId }: { siteId: number }) {
             </div>
             <div className="flex items-center gap-2">
               <SimpleTooltip content="Re-crawl this site to refresh its llms.txt.">
-                <Button
-                 onClick={() => triggerMutation.mutate()}
-                  disabled={isInProgress || triggerMutation.isPending || !!(
-                      triggerMutation.error instanceof ApiError &&
-                      triggerMutation.error.status === 409) }>
+                <Button onClick={() => triggerMutation.mutate()} disabled={triggerDisabled}>
                   {isInProgress ? "Crawling…" : triggerMutation.isPending ? "Starting…" : "Re-crawl now"}
                 </Button>
               </SimpleTooltip>

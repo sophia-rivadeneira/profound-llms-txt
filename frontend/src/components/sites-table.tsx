@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from "@/
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, type Site } from "@/lib/api";
+import { api, isStatusInFlight, type Site } from "@/lib/api";
 import { useLastSeenEventId } from "@/lib/seen";
 
 function formatRelative(iso: string | null): string {
@@ -31,10 +31,8 @@ export function SitesTable() {
     queryKey: ["sites"],
     queryFn: () => api.listSites(),
     refetchInterval: (query) => {
-      const anyInFlight = query.state.data?.some(
-        (s) =>
-          s.last_crawl_status === "pending" ||
-          s.last_crawl_status === "running",
+      const anyInFlight = query.state.data?.some((s) =>
+        isStatusInFlight(s.last_crawl_status),
       );
       return anyInFlight ? 2000 : false;
     },
@@ -107,7 +105,7 @@ function SiteRow({ site }: { site: Site }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const lastSeen = useLastSeenEventId(site.id);
-  const hasUnread = site.latest_event_id !== null && site.latest_event_id > lastSeen;
+  const hasUnread = (site.latest_event_id ?? 0) > lastSeen;
 
   const recrawlMutation = useMutation({
     mutationFn: () => api.triggerCrawl(site.id),
@@ -119,7 +117,7 @@ function SiteRow({ site }: { site: Site }) {
     },
   });
 
-  const isCrawlInFlight = site.last_crawl_status === "running" || site.last_crawl_status === "pending";
+  const isCrawlInFlight = isStatusInFlight(site.last_crawl_status);
 
   return (
     <TableRow
@@ -137,7 +135,7 @@ function SiteRow({ site }: { site: Site }) {
       <TableCell className="text-muted-foreground tabular-nums">
         {site.last_crawl_status === "failed" ? (
           <span className="text-destructive text-sm">Failed</span>
-        ) : site.last_crawl_status === "running" || site.last_crawl_status === "pending" ? (
+        ) : isCrawlInFlight ? (
           <span className="text-muted-foreground text-sm">Crawling…</span>
         ) : (
           formatRelative(site.last_crawled_at)

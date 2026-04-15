@@ -27,6 +27,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type CrawlStatus = "pending" | "running" | "completed" | "failed";
+
+export function isStatusInFlight(status: CrawlStatus | null | undefined): boolean {
+  return status === "pending" || status === "running";
+}
+
 export type Site = {
   id: number;
   url: string;
@@ -37,7 +43,7 @@ export type Site = {
   created_at: string;
   updated_at: string;
   last_crawled_at: string | null;
-  last_crawl_status: string | null;
+  last_crawl_status: CrawlStatus | null;
   event_count: number;
   latest_event_id: number | null;
 };
@@ -46,7 +52,7 @@ export type CrawlJob = {
   id: number;
   site_id: number;
   triggered_by: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: CrawlStatus;
   pages_found: number;
   error_message: string | null;
   started_at: string | null;
@@ -103,7 +109,6 @@ export type PageDataRow = {
   description: string | null;
   section: string | null;
   is_optional: boolean;
-  status_code: number | null;
   crawled_at: string;
 };
 

@@ -28,7 +28,6 @@ class PageData(Base):
     description: Mapped[str | None] = mapped_column(Text)
     section: Mapped[str | None] = mapped_column(String)
     is_optional: Mapped[bool] = mapped_column(default=False)
-    status_code: Mapped[int | None]
     crawled_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     crawl_job: Mapped[CrawlJob] = relationship(back_populates="pages")

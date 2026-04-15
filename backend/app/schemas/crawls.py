@@ -36,7 +36,6 @@ class PageDataResponse(BaseModel):
     description: str | None
     section: str | None
     is_optional: bool
-    status_code: int | None
     crawled_at: datetime
 
     model_config = {"from_attributes": True}

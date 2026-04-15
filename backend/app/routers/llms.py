@@ -6,20 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models import ChangeEvent, CrawlJob, LlmsFile, Site
+from app.models import ChangeEvent, CrawlJob, LlmsFile
+from app.routers._deps import get_site_or_404
 from app.schemas import ChangeEventResponse, LlmsFileResponse
 
 router = APIRouter(prefix="/sites/{site_id}", tags=["llms"])
 
 
-async def get_site_or_404(site_id: int, db: AsyncSession = Depends(get_db)) -> Site:
-    site = await db.get(Site, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
-    return site
-
-
-async def get_llms_or_404(site_id: int, db: AsyncSession = Depends(get_db)) -> LlmsFile:
+async def get_llms_or_404(
+    site_id: int, db: AsyncSession = Depends(get_db)
+) -> LlmsFile:
     result = await db.execute(select(LlmsFile).where(LlmsFile.site_id == site_id))
     llms_file = result.scalar_one_or_none()
     if not llms_file:
@@ -27,13 +23,21 @@ async def get_llms_or_404(site_id: int, db: AsyncSession = Depends(get_db)) -> L
     return llms_file
 
 
-@router.get("/llms", response_model=LlmsFileResponse, dependencies=[Depends(get_site_or_404)])
-async def get_llms_json(llms_file: LlmsFile = Depends(get_llms_or_404)) -> LlmsFileResponse:
+@router.get(
+    "/llms",
+    response_model=LlmsFileResponse,
+    dependencies=[Depends(get_site_or_404)],
+)
+async def get_llms_json(
+    llms_file: LlmsFile = Depends(get_llms_or_404),
+) -> LlmsFileResponse:
     return LlmsFileResponse.model_validate(llms_file)
 
 
 @router.get("/llms.txt", dependencies=[Depends(get_site_or_404)])
-async def get_llms_raw(llms_file: LlmsFile = Depends(get_llms_or_404)) -> PlainTextResponse:
+async def get_llms_raw(
+    llms_file: LlmsFile = Depends(get_llms_or_404),
+) -> PlainTextResponse:
     return PlainTextResponse(
         llms_file.content,
         media_type="text/plain",
@@ -41,7 +45,11 @@ async def get_llms_raw(llms_file: LlmsFile = Depends(get_llms_or_404)) -> PlainT
     )
 
 
-@router.get("/changes", response_model=list[ChangeEventResponse], dependencies=[Depends(get_site_or_404)])
+@router.get(
+    "/changes",
+    response_model=list[ChangeEventResponse],
+    dependencies=[Depends(get_site_or_404)],
+)
 async def list_change_events(
     site_id: int,
     db: AsyncSession = Depends(get_db),
