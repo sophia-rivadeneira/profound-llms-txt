@@ -174,5 +174,3 @@ The app is deployed as two services:
 - **Backend** on [Railway](https://railway.com) — Docker-based deploy from `backend/` with a Dockerfile that installs Playwright's Chromium dependency
 
 PostgreSQL is provisioned as a Railway service in the same project. The backend's `DATABASE_URL` is wired via Railway's service reference variables.
-
-See `PLAN.md` (Phase 7) for the full step-by-step deployment checklist.
