@@ -492,12 +492,65 @@ Final sweep before deployment focused on **cleanliness, efficiency, and scalabil
 - README / local-run docs — Phase 7.
 - New features, design changes, or scope additions of any kind.
 
-### Phase 7: Deployment & Polish
-- [ ] Deploy frontend to Vercel
-- [ ] Deploy backend to Railway (Docker for Playwright)
-- [ ] Set up PostgreSQL on Railway
-- [ ] README with setup/deployment docs
-- [ ] Screenshots/demo video
+### Phase 7: Deployment
+
+**Order: Postgres → Backend → Frontend (each step needs the previous one's URL)**
+
+**Step 1: Accounts**
+- [ ] Create Railway account at railway.com (GitHub login for automatic repo access)
+- [ ] Create Vercel account at vercel.com (GitHub login for automatic repo access)
+
+**Step 2: PostgreSQL on Railway**
+- [ ] New project → Add PostgreSQL service (one-click provision)
+- [ ] Note the `DATABASE_URL` from the service's Variables tab — `config.py:database_url_async` auto-translates Railway's `postgres://` scheme to `postgresql+asyncpg://` so no manual rewriting needed
+
+**Step 3: Backend on Railway**
+- [ ] Add a new service in the same project → connect the GitHub repo
+- [ ] Set root directory to `backend/`
+- [ ] Add `Dockerfile` to `backend/` (Playwright requires Chromium installed at the OS level):
+  - Python 3.12 slim base
+  - Install `uv`, sync deps from `pyproject.toml` + `uv.lock`
+  - Install Playwright Chromium: `playwright install --with-deps chromium`
+  - Startup command: `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- [ ] Set env vars on Railway:
+  - `DATABASE_URL` → reference the Postgres service's variable (`${{Postgres.DATABASE_URL}}`)
+  - `CORS_ORIGINS` → placeholder `http://localhost:3000` until Vercel URL is known
+  - `ENV` → `production`
+- [ ] Deploy and verify `https://<railway-url>/health` returns `{"status": "ok"}`
+- [ ] Copy the backend's public URL (`*.up.railway.app`)
+
+**Step 4: Frontend on Vercel**
+- [ ] New project → import the GitHub repo
+- [ ] Set root directory to `frontend/`
+- [ ] Framework preset: Next.js (auto-detected)
+- [ ] Set env vars:
+  - `NEXT_PUBLIC_API_URL` → the Railway backend URL from step 3
+- [ ] Deploy and verify the landing page loads
+
+**Step 5: Wire CORS + end-to-end test**
+- [ ] Go back to Railway → update `CORS_ORIGINS` to the Vercel URL (e.g. `https://profound-llms-txt.vercel.app`)
+- [ ] Redeploy backend (or Railway may pick up env var changes automatically)
+- [ ] Test end-to-end: paste a URL on the frontend, crawl should run, llms.txt should generate
+
+**Step 6: Custom domain (optional)**
+- [ ] Buy/configure domain
+- [ ] Point it at Vercel (frontend) via DNS — Vercel handles SSL automatically
+- [ ] Update `CORS_ORIGINS` on Railway to include the custom domain
+
+**Step 7: Commit outstanding local changes**
+- [ ] `_PageToCrawl` rename in `crawler.py`
+- [ ] Lazy Playwright refactor (`playwright_renderer.py` + `crawler.py`)
+- [ ] `config.py` `database_url_async` property
+- [ ] `session.py` + `alembic/env.py` — use `database_url_async`
+- [ ] `layout.tsx` title change
+- [ ] `.gitignore` update for `REVIEW.md`
+- [ ] Dockerfile (new)
+
+**Step 8: README**
+- [ ] Project description (one paragraph)
+- [ ] Local setup: Docker for Postgres, `uv sync`, `alembic upgrade head`, `playwright install chromium`, `uvicorn app.main:app --reload`, `npm install`, `npm run dev`
+- [ ] Env var reference (document every var in `.env.example`)
+- [ ] Live deployed URLs
 
 ## Verification
 - Test crawling on diverse sites: static (blog), server-rendered (Next.js docs), JS-heavy (SPA)

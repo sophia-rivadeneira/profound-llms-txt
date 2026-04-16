@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from playwright.async_api import Browser, async_playwright
+
+from app.services.extract import PageMeta, extract_metadata
 
 
 @asynccontextmanager
@@ -10,13 +13,24 @@ async def optional_browser(enabled: bool):
     if not enabled:
         yield None
         return
-    pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True)
+
+    pw = None
+    browser = None
+
+    async def get_browser() -> Browser:
+        nonlocal pw, browser
+        if browser is None:
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch(headless=True)
+        return browser
+
     try:
-        yield browser
+        yield get_browser
     finally:
-        await browser.close()
-        await pw.stop()
+        if browser is not None:
+            await browser.close()
+        if pw is not None:
+            await pw.stop()
 
 
 async def fetch_rendered_html(
@@ -27,7 +41,6 @@ async def fetch_rendered_html(
     try:
         page = await browser.new_page(user_agent="ProfoundLlmsTxtBot/0.1 (Playwright)")
         await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-        # Scroll to bottom to trigger lazy-loaded nav/footer links, then back to top.
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(800)
         await page.evaluate("window.scrollTo(0, 0)")
@@ -36,3 +49,16 @@ async def fetch_rendered_html(
         return content
     except Exception:
         return None
+
+
+async def re_fetch_with_playwright(
+    url: str,
+    get_browser: Callable[[], Awaitable[object]],
+) -> PageMeta | None:
+    browser = await get_browser()
+    rendered = await fetch_rendered_html(url, browser)
+    if not rendered:
+        return None
+    meta = extract_metadata(rendered, url)
+    meta.url = url
+    return meta

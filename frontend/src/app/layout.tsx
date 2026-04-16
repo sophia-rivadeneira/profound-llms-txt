@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Profound llms.txt Generator",
+  title: "llms.txt Generator",
   description: "Generate and monitor llms.txt files for any website.",
 };
 

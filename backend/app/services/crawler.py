@@ -19,7 +19,7 @@ from app.db.session import AsyncSessionLocal
 from app.models import CrawlJob, Monitor, PageData, Site
 from app.services.extract import PageMeta, extract_metadata, looks_like_js_shell
 from app.services.generator import generate_llms_txt
-from app.services.playwright_renderer import Browser, fetch_rendered_html, optional_browser
+from app.services.playwright_renderer import optional_browser, re_fetch_with_playwright
 from app.services.sitemap import fetch_sitemap_urls
 from app.services.robots import RobotsChecker
 from app.services.urls import USER_AGENT, is_same_domain, normalize_url
@@ -38,7 +38,7 @@ class CrawlConfig:
 
 
 @dataclass
-class _QueueItem:
+class _PageToCrawl:
     url: str
     depth: int
 
@@ -51,9 +51,6 @@ class CrawlResult:
 
 
 async def run_crawl_in_background(site_id: int, crawl_job_id: int) -> None:
-    """Open a fresh session and run a crawl for the given job. Used by
-    FastAPI `BackgroundTasks` — the original request's session is already
-    closed by the time this fires, so we can't share it."""
     async with AsyncSessionLocal() as session:
         site = await session.get(Site, site_id)
         crawl_job = await session.get(CrawlJob, crawl_job_id)
@@ -209,19 +206,19 @@ async def _crawl(
             base_url, client, extra_sitemap_urls=sitemap_urls_from_robots
         )
 
-        queue: deque[_QueueItem] = deque()
+        queue: deque[_PageToCrawl] = deque()
 
         if sitemap_urls:
             for u in sitemap_urls:
                 if u not in visited and is_same_domain(u, base_url):
-                    queue.append(_QueueItem(url=u, depth=0))
+                    queue.append(_PageToCrawl(url=u, depth=0))
                     visited.add(u)
 
         if base_normalized not in visited:
-            queue.append(_QueueItem(url=base_normalized, depth=0))
+            queue.append(_PageToCrawl(url=base_normalized, depth=0))
             visited.add(base_normalized)
 
-        async with optional_browser(config.use_playwright_fallback) as browser:
+        async with optional_browser(config.use_playwright_fallback) as get_browser:
             while queue:
                 if result.pages_found >= config.max_pages:
                     break
@@ -236,7 +233,7 @@ async def _crawl(
                 batch = [queue.popleft() for _ in range(batch_size)]
 
                 tasks = [
-                    _fetch_page(item, client, robots, semaphore, config, base_url, browser)
+                    _fetch_page(item, client, robots, semaphore, config, base_url, get_browser)
                     for item in batch
                 ]
                 pages = await asyncio.gather(*tasks)
@@ -262,7 +259,7 @@ async def _crawl(
                         if new_depth > config.max_depth:
                             continue
                         visited.add(link)
-                        queue.append(_QueueItem(url=link, depth=new_depth))
+                        queue.append(_PageToCrawl(url=link, depth=new_depth))
 
                 if progress_callback is not None:
                     await progress_callback(result.pages_found)
@@ -274,13 +271,13 @@ async def _crawl(
 
 
 async def _fetch_page(
-    item: _QueueItem,
+    item: _PageToCrawl,
     client: httpx.AsyncClient,
     robots: RobotsChecker,
     semaphore: asyncio.Semaphore,
     config: CrawlConfig,
     base_url: str,
-    browser: Browser | None = None,
+    get_browser: Callable[[], Awaitable[object]] | None = None,
 ) -> PageMeta | None:
     async with semaphore:
         if not await robots.can_fetch(item.url, client):
@@ -303,10 +300,7 @@ async def _fetch_page(
         meta = extract_metadata(html, final_url)
         meta.url = final_url
 
-        if config.use_playwright_fallback and looks_like_js_shell(html) and browser:
-            rendered = await fetch_rendered_html(final_url, browser)
-            if rendered:
-                meta = extract_metadata(rendered, final_url)
-                meta.url = final_url
+        if config.use_playwright_fallback and looks_like_js_shell(html) and get_browser:
+            meta = await re_fetch_with_playwright(final_url, get_browser) or meta
 
         return meta

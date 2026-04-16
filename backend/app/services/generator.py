@@ -70,9 +70,6 @@ def _format_page_link(
 
 
 def normalize_text(text: str | None) -> str:
-    """Canonicalize text for equality comparisons — lowercase, collapse
-    whitespace, trim. Used to detect duplicate descriptions inherited from
-    a global <meta> tag."""
     if not text:
         return ""
     return re.sub(r"\s+", " ", text).strip().lower()

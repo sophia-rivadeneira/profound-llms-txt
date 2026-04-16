@@ -23,6 +23,7 @@ frontend/next-env.d.ts
 
 # Personal notes (not for the evaluators)
 DEVLOG.md
+REVIEW.md
 
 # OS / editor
 .DS_Store
