@@ -7,11 +7,12 @@ See the [root README](../README.md) for architecture and the full project overvi
 ## Run locally
 
 ```bash
-createdb profound                    # one-time, requires local Postgres
-cp .env.example .env                 # edit DATABASE_URL if your local user differs
-uv sync                              # install deps into .venv
-uv run alembic upgrade head          # apply migrations
-uv run uvicorn app.main:app --reload # http://localhost:8000
+createdb profound                                # one-time, requires local Postgres
+cp .env.example .env                             # edit DATABASE_URL if your local user differs
+uv sync                                          # install deps into .venv
+uv run playwright install --with-deps chromium   # headless browser for JS-rendered page fallback
+uv run alembic upgrade head                      # apply migrations
+uv run uvicorn app.main:app --reload             # http://localhost:8000
 ```
 
 Health check: `curl http://localhost:8000/health`

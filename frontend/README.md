@@ -34,6 +34,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 - **TypeScript**
 - **Tailwind CSS v4**
 - **shadcn/ui** — Radix base, Nova preset (Geist font, Lucide icons)
+- **TanStack Query** — server state, polling, and cache invalidation
 - **`lib/api.ts`** — typed fetch wrapper pointing at `NEXT_PUBLIC_API_URL`
 
 ## Layout
@@ -46,6 +47,7 @@ frontend/
 │   │   └── ui/           shadcn/ui components
 │   └── lib/
 │       ├── api.ts        typed fetch wrapper for the backend
+│       ├── seen.ts       localStorage helper for "seen" change markers
 │       └── utils.ts      cn() helper from shadcn
 ├── public/
 ├── components.json       shadcn config
