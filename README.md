@@ -4,6 +4,11 @@ A web app that generates and monitors [llms.txt](https://llmstxt.org/) files for
 
 Paste a URL, the crawler fetches every reachable page, classifies them into sections, and emits a spec-compliant llms.txt file. A built-in scheduler re-crawls on a configurable interval and a change timeline tracks what was added, removed, or modified between crawls.
 
+## Demo
+
+- **Live app:** [llmtxtgenerator.vercel.app](https://llmtxtgenerator.vercel.app/)
+- **Walkthrough & demo video:** [Google Slides presentation](https://docs.google.com/presentation/d/1TPY65Cf1I824olDAuoBqk4v59_l753Ka/edit?usp=sharing&ouid=117857723883217353471&rtpof=true&sd=true)
+
 ## Features
 
 - **Async BFS crawler** — httpx for speed, Playwright fallback for JS-rendered SPAs, robots.txt respected, sitemap-first discovery
